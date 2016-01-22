@@ -1,6 +1,5 @@
-##! A detection script for Bulk Flows
-
 @load base/protocols/conn
+@load base/protocols/conn/thresholds
 
 module Bulk;
 
@@ -43,54 +42,50 @@ redef record Conn::Info += {
     bulk: bool &optional &default=F;
 };
 
-function size_callback(c: connection, cnt: count): interval
-    {
-    if ( c$orig$size > size_threshold || c$resp$size > size_threshold )
-        {
-        #c$conn$bulk = T;
-        event Bulk::connection_detected(c);
-        return -1sec;
-        }
 
-    if ( cnt >= max_poll_count )
-        return -1sec;
-
-    #at first delay for poll_interval_1, later for poll_interval_2
-    return (cnt < max_poll_count/3) ? poll_interval_1 : poll_interval_2;
-    }
-
+event ConnThreshold::bytes_threshold_crossed(c: connection, threshold: count, is_orig: bool)
+{
+	event Bulk::connection_detected(c);
+}
 
 function bulk_initial_criteria(c: connection): bool
-    {
+{
     local pr: PortRange;
 
-    if(c$id$orig_h in hosts)
+    if( c$id$orig_h in hosts ) {
         pr = hosts[c$id$orig_h];
-    else if(c$id$resp_h in hosts)
+    } else if(c$id$resp_h in hosts) {
         pr = hosts[c$id$resp_h];
-    else
+    } else {
         return F;
+    }
 
-    if(pr?$ports) {
+    if( pr?$ports ) {
         return (c$id$resp_p in pr$ports);
     }
 
     return (pr$port_min <= c$id$resp_p && c$id$resp_p <= pr$port_max);
-    }
+}
 
 event new_connection(c: connection) &priority=-3
-    {
-    if ( bulk_initial_criteria(c) )
-        ConnPolling::watch(c, size_callback, 0, 0secs);
+{
+    if ( bulk_initial_criteria(c) ) {
+    	ConnThreshold::set_bytes_threshold(c, size_threshold, T);
+    	ConnThreshold::set_bytes_threshold(c, size_threshold, F);
     }
+}
 
 event connection_state_remove(c: connection)
-    {
-    if(c$conn$bulk)
+{
+    if(c$conn$bulk) {
         return;
-    if ( bulk_initial_criteria(c) && (c$orig$size > size_threshold || c$resp$size > size_threshold ))
+    }
+
+    if ( bulk_initial_criteria(c) &&
+         (c$orig$size > size_threshold || c$resp$size > size_threshold )) {
         c$conn$bulk = T;
     }
+}
 
 event bro_init()
 {
